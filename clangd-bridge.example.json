@@ -1,0 +1,30 @@
+{
+  "clangdPath": "C:/path/to/clangd.exe",
+  "projectRoot": "C:/path/to/project",
+  "compileCommandsDir": "C:/path/to/project/build",
+  "allowedRoots": [
+    "C:/path/to/project",
+    "C:/path/to/project/build"
+  ],
+  "requireCompileDb": true,
+  "backgroundIndex": true,
+  "clangTidy": false,
+  "queryDriver": null,
+  "allowQueryDriver": false,
+  "startupTimeoutMs": 30000,
+  "requestTimeoutMs": 30000,
+  "diagnosticsWaitMs": 2000,
+  "maxResults": 200,
+  "maxFileBytes": 8388608,
+  "maxOpenDocuments": 16,
+  "maxRestartsPerHour": 3,
+  "env": {
+    "PATH": "%PATH%;C:/path/to/clang/bin"
+  },
+  "log": {
+    "level": "info",
+    "dir": null,
+    "maxBytes": 5242880,
+    "maxFiles": 3
+  }
+}

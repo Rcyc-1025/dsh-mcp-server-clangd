@@ -1,0 +1,13 @@
+node_modules/
+logs/
+*.log
+.dsh-clangd-bridge/
+index/
+.cache/
+tests/.tmp/
+
+# 本机配置（含真实路径），仓库里只保留 example
+clangd-bridge.json
+
+# fixtures 的 compile_commands.json 由模板生成，不入库
+tests/fixtures/*/compile_commands.json

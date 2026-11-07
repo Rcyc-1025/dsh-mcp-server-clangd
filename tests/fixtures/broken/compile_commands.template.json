@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "{{FIXTURE_DIR}}",
+    "file": "main.cpp",
+    "arguments": ["{{CLANGXX}}", "-std=c++17", "-c", "main.cpp"]
+  }
+]
