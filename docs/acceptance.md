@@ -19,9 +19,9 @@ npm run accept
 
 ## 结果汇总
 
-`npm test`：**35 个单元 + 14 个集成，全部 PASS**（约 2 秒）。
+`npm test`：**57 项（40 单元 + 17 集成）全部 PASS**（约 2 秒）。
 
-`npm run accept`：**18/18 PASS**，明细如下。
+`npm run accept`：**20/20 PASS**，明细如下。
 
 | 项 | 场景 | 期望 | 实测 |
 | --- | --- | --- | --- |
@@ -35,6 +35,8 @@ npm run accept
 | F3 | `document_symbols main.cpp` | 1 个 `main` | `total=1`，`kind=function` |
 | F4 | `workspace_symbols query=foo` | 命中 `foo` | `total=1` |
 | F5 | 干净文件 `diagnostics` | `pending=false`、0 条 | `total=0` |
+| F9 | 5 个列表工具的顶层 `truncated`、`references.locations` | 均为布尔且与 `meta.truncated` 一致；无旧字段 `references` | `ok` |
+| F10 | `health.checks` 含 `log.dir` / `queryDriver` | 两项都在 | 8 个 check 全在 |
 | E | `definition C:/Windows/win.ini` | `PATH_OUTSIDE_ALLOWED_ROOTS` | 同左（`isError=false`） |
 | F6 | `line=9999` | `POSITION_OUT_OF_RANGE` | 同左（不 clamp） |
 | F7 | `workspace_symbols query="  "` | `INVALID_ARGUMENT` | 同左 |
@@ -68,6 +70,22 @@ npm run accept
 
 `clangd_diagnostics` 打开文档后等待 `publishDiagnostics`（默认 2000ms，可传 `waitMs` 0..10000）。若超时，返回 `pending:true` + 当前缓存，并在 `note` 里说明；调用方可以加大 `waitMs` 重试，而不是把“还没推送”误判成“没有错误”。
 
+### 诊断缓存与重启同步（审查修复）
+
+- 首次 `didOpen` 与内容变化 `didChange` **之前**清空该 URI 的旧诊断；只有 mtime/size 未变时才复用缓存。这样 `pending:false` 只可能对应“本版本的诊断已到”。
+- `LspClient` 退出/重启时 `clearAllDiagnostics()`：清诊断与 waiter，等待方立即得到 `pending:true`，不会挂到超时。
+- `DocumentStore` 订阅 `client.on('exit')` → `forgetAll()`：丢弃文档记录（不发 `didClose`），下次 `ensure` 重新 `didOpen` 且版本重置为 1。否则 clangd 崩溃重启后会误以为旧文档仍打开而跳过 `didOpen`。
+
+### queryDriver 与 log.dir 的收口（审查修复）
+
+- `queryDriver` 只在 `allowQueryDriver:true` 时生效，且 `;` 分隔的每一项（glob 取静态前缀）`realpath` 后必须位于 `allowedRoots` 内；不满足时配置层直接禁用 + 警告，`buildArgs()` 二次校验并抛 `CONFIG_INVALID`，`health.checks` 给出 `queryDriver` 结论。
+- `log.dir` 必须在 `projectRoot` 或系统临时目录内；越界时回落到 `<tmp>/dsh-clangd-bridge/logs` 并写 warning，`health.checks` 的 `log.dir` 同时复核。
+
+### 同步 schema 修正（审查修复）
+
+- `clangd_references` 顶层输出 `locations`（规格 §7.4），不再输出 `references`。
+- `definition` / `references` / `diagnostics` / `document_symbols` / `workspace_symbols` 的 `truncated` 同时出现在顶层与 `meta.truncated`（规格 §6.3 / §7.2 / §7.6 / §7.7），两者恒等。
+
 ## 真实 LLVM 冒烟（只记录，不作为门禁）
 
 配置：`clangd-bridge.json`（`projectRoot=compileCommandsDir=D:/Code/llvm-build`，`allowedRoots` 含 `D:/Code/llvm-build`、`D:/Code/llvm`、`D:/Code/llvm-src`，`backgroundIndex:true`）。
@@ -85,7 +103,7 @@ npm run accept
 
 ## 回归清单（改代码后重跑）
 
-1. `npm test` —— 35 单元 + 14 集成；
-2. `npm run accept` —— 18 项全 PASS；
+1. `npm test` —— 57 项（40 单元 + 17 集成）；
+2. `npm run accept` —— 20 项全 PASS；
 3. 改动 `client.js` 启动/重启逻辑时，额外确认 `health` 里 `restarts` 在首次启动后仍为 0、崩溃重启后才递增；
 4. 改动 `normalize.js` 时，重点看 `document_symbols` 的截断是否仍保持树结构（子节点不重复进扁平列表）。

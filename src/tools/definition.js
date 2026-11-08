@@ -48,6 +48,7 @@ export async function handler(ctx, rawArgs) {
     position: { line, column },
     locations,
     total: all.length,
+    truncated,
     meta: metaFor({ client: ctx.client, doc, startedAt, truncated }),
   };
   if (all.length === 0) {

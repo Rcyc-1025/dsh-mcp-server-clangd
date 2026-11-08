@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { BridgeError } from './errors.js';
-import { realpathOrNull } from './paths.js';
+import { isInsideRoot, queryDriverProblem, realpathLoose, realpathOrNull } from './paths.js';
 
 const ENV_ENV_WHITELIST = /^(PATH|INCLUDE|LIB|LIBPATH|SYSTEMROOT|SYSTEMDRIVE|TEMP|TMP|CLANGD_[A-Z0-9_]*|VCToolsInstallDir|WindowsSdkDir|UCRTVersion)$/;
 
@@ -19,6 +19,8 @@ const DEFAULTS = {
   backgroundIndex: true,
   clangTidy: false,
   queryDriver: null,
+  queryDriverRequested: null,
+  queryDriverIssue: null,
   allowQueryDriver: false,
   startupTimeoutMs: 30000,
   requestTimeoutMs: 30000,
@@ -122,14 +124,33 @@ function normalizeEnvMap(raw) {
   return out;
 }
 
-function normalizeLog(raw, projectRoot) {
+function normalizeLog(raw, projectRoot, warnings, cwd) {
   const log = { ...DEFAULTS.log, ...(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) };
   if (!LOG_LEVELS.has(log.level)) fail(`log.level 必须是 ${[...LOG_LEVELS].join('/')}`, { field: 'log.level' });
   if (log.dir !== null && typeof log.dir !== 'string') fail('log.dir 必须是字符串', { field: 'log.dir' });
-  if (!log.dir) log.dir = path.join(os.tmpdir(), 'dsh-clangd-bridge', 'logs');
   log.maxBytes = asInt(log.maxBytes, 'log.maxBytes', 1024, 100 * 1024 * 1024) ?? DEFAULTS.log.maxBytes;
   log.maxFiles = asInt(log.maxFiles, 'log.maxFiles', 1, 20) ?? DEFAULTS.log.maxFiles;
-  void projectRoot;
+
+  const defaultDir = path.join(os.tmpdir(), 'dsh-clangd-bridge', 'logs');
+  if (!log.dir) {
+    log.dir = defaultDir;
+    return log;
+  }
+  // log.dir 必须落在 projectRoot（workspace）或系统临时目录内，避免把日志写到任意可写目录。
+  const requested = path.resolve(cwd || process.cwd(), log.dir);
+  const requestedReal = realpathLoose(requested);
+  const tmpReal = realpathLoose(os.tmpdir());
+  const projectReal = projectRoot ? realpathLoose(projectRoot) : null;
+  const inside = Boolean(
+    requestedReal
+    && ((tmpReal && isInsideRoot(requestedReal, tmpReal)) || (projectReal && isInsideRoot(requestedReal, projectReal))),
+  );
+  if (!inside) {
+    warnings.push(`log.dir 必须位于 projectRoot 或系统临时目录内；已忽略 ${requested}，改用默认目录 ${defaultDir}`);
+    log.dir = defaultDir;
+  } else {
+    log.dir = requested;
+  }
   return log;
 }
 
@@ -238,10 +259,23 @@ export function loadConfig({ argv = process.argv.slice(2), env = process.env, cw
     config[key] = value === undefined ? def[0] : value;
   }
 
-  config.queryDriver = asString(raw.queryDriver, 'queryDriver') || null;
-  if (config.queryDriver && !config.allowQueryDriver) {
-    warnings.push('检测到 queryDriver 但 allowQueryDriver 不为 true，已忽略；queryDriver 属于高风险能力。');
-    config.queryDriver = null;
+  config.queryDriverRequested = asString(raw.queryDriver, 'queryDriver') || null;
+  config.queryDriver = config.queryDriverRequested;
+  config.queryDriverIssue = null;
+  if (config.queryDriver) {
+    if (!config.allowQueryDriver) {
+      config.queryDriverIssue = 'allowQueryDriver 不为 true';
+      warnings.push('检测到 queryDriver 但 allowQueryDriver 不为 true，已忽略；queryDriver 属于高风险能力。');
+      config.queryDriver = null;
+    } else {
+      // 高风险：--query-driver 会让 clangd 执行匹配的编译器驱动，路径必须锁在 allowedRoots 内。
+      const problem = queryDriverProblem(config.queryDriver, config.allowedRoots);
+      if (problem) {
+        config.queryDriverIssue = problem;
+        warnings.push(`queryDriver 已禁用：${problem}（queryDriver 只能在 allowedRoots 内指定）`);
+        config.queryDriver = null;
+      }
+    }
   }
 
   config.startupTimeoutMs = asInt(raw.startupTimeoutMs, 'startupTimeoutMs', 1000, 120000) ?? DEFAULTS.startupTimeoutMs;
@@ -253,7 +287,7 @@ export function loadConfig({ argv = process.argv.slice(2), env = process.env, cw
   config.maxRestartsPerHour = asInt(raw.maxRestartsPerHour, 'maxRestartsPerHour', 0, 10) ?? DEFAULTS.maxRestartsPerHour;
 
   config.env = normalizeEnvMap(raw.env);
-  config.log = normalizeLog(raw.log, config.projectRoot);
+  config.log = normalizeLog(raw.log, config.projectRoot, warnings, cwd);
 
   return {
     config,

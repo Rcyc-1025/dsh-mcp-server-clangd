@@ -38,6 +38,8 @@ function fallbackConfig() {
     backgroundIndex: true,
     clangTidy: false,
     queryDriver: null,
+    queryDriverRequested: null,
+    queryDriverIssue: null,
     allowQueryDriver: false,
     startupTimeoutMs: 30000,
     requestTimeoutMs: 30000,

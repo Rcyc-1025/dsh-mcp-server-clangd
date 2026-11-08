@@ -14,6 +14,22 @@ export class DocumentStore {
     this.docs = new Map();
     this.order = [];
     this.locks = new Map();
+    // clangd 崩溃/重启后，旧进程打开的文档全部失效：清空记录，下一次 ensure 会重新 didOpen。
+    if (this.client && typeof this.client.on === 'function') {
+      this.client.on('exit', () => this.forgetAll());
+    }
+  }
+
+  // 只丢弃本地记录，不发送 didClose（进程已经退出）；版本从 1 重新开始。
+  forgetAll() {
+    const count = this.docs.size;
+    this.docs.clear();
+    this.order = [];
+    if (count > 0) this.logger.debug('document.forget-all', { count });
+  }
+
+  clearDiagnostics(uri) {
+    if (this.client && typeof this.client.clearDiagnostics === 'function') this.client.clearDiagnostics(uri);
   }
 
   static key(filePath) {
@@ -57,6 +73,7 @@ export class DocumentStore {
       } catch (err) {
         this.logger.warn('document.close-failed', { uri: doc.uri, error: String(err && err.message) });
       }
+      this.clearDiagnostics(doc.uri);
       this.docs.delete(key);
       this.logger.debug('document.evicted', { uri: doc.uri });
       return;
@@ -109,6 +126,9 @@ export class DocumentStore {
           content: text,
           opened: true,
         };
+        // 首次打开：该 URI 之前（可能来自旧进程/旧版本）的缓存诊断一律作废；
+        // 先清再 didOpen，避免 clangd 立即推送的诊断被误删。
+        this.clearDiagnostics(uri);
         this.client.notify('textDocument/didOpen', {
           textDocument: { uri, languageId: languageIdFor(filePath), version: 1, text },
         });
@@ -130,6 +150,8 @@ export class DocumentStore {
       existing.mtimeMs = stat.mtimeMs;
       existing.size = stat.size;
       existing.content = text;
+      // 内容已变：先清空旧诊断，再 didChange 等新版本的 publishDiagnostics。
+      this.clearDiagnostics(uri);
       this.client.notify('textDocument/didChange', {
         textDocument: { uri, version: existing.version },
         contentChanges: [{ text }],
@@ -154,6 +176,7 @@ export class DocumentStore {
       } catch {
         // 进程可能已退出
       }
+      this.clearDiagnostics(doc.uri);
       this.docs.delete(key);
     }
     this.order = [];

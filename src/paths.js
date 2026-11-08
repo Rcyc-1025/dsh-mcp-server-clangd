@@ -74,6 +74,58 @@ export function isInsideRoot(child, root) {
   return rel !== '..' && !rel.startsWith('..' + path.sep);
 }
 
+// 解析可能尚不存在的路径：对最近存在的祖先做 realpath，再拼回剩余段。
+// 用于校验 log.dir / queryDriver 这类“即将创建或带通配符”的路径。
+export function realpathLoose(input) {
+  let current = path.resolve(input);
+  const tail = [];
+  for (let depth = 0; depth < 64; depth += 1) {
+    const real = realpathOrNull(current);
+    if (real) return tail.length ? path.join(real, ...[...tail].reverse()) : real;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    tail.push(path.basename(current));
+    current = parent;
+  }
+  return null;
+}
+
+// 展开配置里的 %VAR%（Windows 风格）；未知变量原样保留。
+export function expandEnvVars(value, env = process.env) {
+  return String(value).replace(/%([^%]+)%/g, (whole, name) => {
+    const upper = name.toUpperCase();
+    const found = env[upper] ?? env[name];
+    return found === undefined ? whole : found;
+  });
+}
+
+const GLOB_CHARS = /[*?\[]/;
+
+// 校验 queryDriver（'=' 后用分号分隔的 glob 列表）：
+// 每个条目必须是绝对路径，且其静态部分所在目录（realpath 后）位于 allowedRoots 内。
+// 返回 null 表示通过；否则返回中文原因。不做“信任用户”的假设：这是执行外部编译器的入口。
+export function queryDriverProblem(value, allowedRoots, env = process.env) {
+  if (!value) return null;
+  const entries = String(value).split(';').map((s) => s.trim()).filter(Boolean);
+  if (entries.length === 0) return 'queryDriver 为空';
+  for (const rawEntry of entries) {
+    const entry = expandEnvVars(rawEntry, env);
+    if (isDeviceOrUncPath(entry)) return `条目是设备/UNC 路径：${entry}`;
+    if (!path.isAbsolute(entry)) return `条目必须是绝对路径：${entry}`;
+    const globAt = entry.search(GLOB_CHARS);
+    const staticPart = globAt === -1 ? entry : entry.slice(0, globAt);
+    if (!staticPart) return `条目必须以绝对路径开头：${entry}`;
+    let anchor = staticPart;
+    if (globAt !== -1 && !/[\\/]$/.test(staticPart)) anchor = path.dirname(staticPart);
+    const realAnchor = realpathLoose(anchor);
+    if (!realAnchor) return `路径不存在：${anchor}`;
+    if (!(allowedRoots || []).some((root) => isInsideRoot(realAnchor, root))) {
+      return `路径不在 allowedRoots 内：${realAnchor}`;
+    }
+  }
+  return null;
+}
+
 export function assertInsideAllowedRoots(realPath, allowedRoots, extra = {}) {
   for (const root of allowedRoots || []) {
     if (isInsideRoot(realPath, root)) return root;

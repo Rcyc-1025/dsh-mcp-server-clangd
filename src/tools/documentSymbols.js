@@ -42,6 +42,7 @@ export async function handler(ctx, rawArgs) {
     hierarchical: normalized.hierarchical,
     symbols: normalized.symbols,
     total: normalized.total,
+    truncated: normalized.truncated,
     meta: metaFor({ client: ctx.client, doc, startedAt, truncated: normalized.truncated }),
   };
   if (normalized.truncated) out.note = `符号数 ${normalized.total} 超过 limit=${limit}，已按 DFS 顺序截断，树可能不完整。`;

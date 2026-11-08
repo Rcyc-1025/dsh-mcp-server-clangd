@@ -58,6 +58,7 @@ export async function handler(ctx, rawArgs) {
     query,
     symbols: normalized.symbols,
     total: normalized.total,
+    truncated: normalized.truncated,
     meta: metaFor({ client: ctx.client, doc: null, startedAt, truncated: normalized.truncated }),
   };
   if (normalized.total === 0) {

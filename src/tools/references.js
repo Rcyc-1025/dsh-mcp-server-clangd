@@ -45,16 +45,17 @@ export async function handler(ctx, rawArgs) {
   );
 
   const all = normalizeReferences(result);
-  const references = all.slice(0, limit);
-  const truncated = all.length > references.length;
+  const locations = all.slice(0, limit);
+  const truncated = all.length > locations.length;
 
   const out = {
     ok: true,
     file: doc.path.split('\\').join('/'),
     position: { line, column },
     includeDeclaration,
-    references,
+    locations,
     total: all.length,
+    truncated,
     meta: metaFor({ client: ctx.client, doc, startedAt, truncated }),
   };
   if (all.length === 0) {

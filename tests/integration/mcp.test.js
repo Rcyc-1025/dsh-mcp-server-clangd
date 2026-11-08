@@ -118,7 +118,7 @@ test('MCP 协议 + 工具（真实 clangd）', { skip }, async (t) => {
     await t.test('references 包含定义与调用', async () => {
       const res = await client.callTool('clangd_references', { file: 'foo.cpp', line: 2, column: 5 });
       assert.ok(res.result.total >= 2);
-      const keys = res.result.references.map((r) => `${r.file}:${r.start.line}:${r.start.column}`);
+      const keys = res.result.locations.map((r) => `${r.file}:${r.start.line}:${r.start.column}`);
       assert.ok(keys.some((k) => k.endsWith('foo.cpp:2:5')), keys.join(','));
       assert.ok(keys.some((k) => k.endsWith('main.cpp:3:10')), keys.join(','));
     });
@@ -142,6 +142,28 @@ test('MCP 协议 + 工具（真实 clangd）', { skip }, async (t) => {
       const res = await client.callTool('clangd_diagnostics', { file: 'main.cpp' });
       assert.equal(res.result.pending, false);
       assert.equal(res.result.total, 0);
+    });
+
+    await t.test('工具输出在顶层暴露 truncated（规格 §6.3/§7.2/§7.4/§7.6/§7.7）', async () => {
+      const calls = [
+        ['clangd_definition', { file: 'main.cpp', line: 3, column: 10 }],
+        ['clangd_references', { file: 'foo.cpp', line: 2, column: 5 }],
+        ['clangd_diagnostics', { file: 'main.cpp', waitMs: 0 }],
+        ['clangd_document_symbols', { file: 'main.cpp' }],
+        ['clangd_workspace_symbols', { query: 'foo', limit: 10 }],
+      ];
+      for (const [tool, args] of calls) {
+        const res = await client.callTool(tool, args);
+        assert.equal(typeof res.result.truncated, 'boolean', `${tool} 缺顶层 truncated`);
+        assert.equal(res.result.meta.truncated, res.result.truncated, `${tool} meta.truncated 不一致`);
+      }
+      const refs = await client.callTool('clangd_references', { file: 'foo.cpp', line: 2, column: 5 });
+      assert.ok(Array.isArray(refs.result.locations), 'references 顶层必须是 locations');
+      assert.equal(refs.result.references, undefined, 'references 不应再输出旧字段名');
+      const health = await client.callTool('clangd_health', {});
+      const ids = health.result.checks.map((c) => c.id);
+      assert.ok(ids.includes('log.dir'), 'health 缺 log.dir 检查');
+      assert.ok(ids.includes('queryDriver'), 'health 缺 queryDriver 检查');
     });
 
     await t.test('业务错误 isError=false 且带 code/hint', async () => {

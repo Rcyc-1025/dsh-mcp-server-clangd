@@ -65,6 +65,7 @@ export async function handler(ctx, rawArgs) {
     total: filtered.length,
     pending,
     waitedMs,
+    truncated,
     meta: metaFor({ client: ctx.client, doc, startedAt, truncated }),
   };
   if (pending) {

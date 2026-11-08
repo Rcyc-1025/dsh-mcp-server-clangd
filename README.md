@@ -38,7 +38,7 @@ clangd 只说 LSP，DSH agent 只会调 MCP 工具。中间这层桥负责：
 ### 成功/失败信封
 
 ```json
-{ "ok": true, "file": "D:/proj/a.cpp", "locations": [], "meta": { "elapsedMs": 12, "clangdPid": 1234, "truncated": false, "slow": false } }
+{ "ok": true, "file": "D:/proj/a.cpp", "locations": [], "truncated": false, "meta": { "elapsedMs": 12, "clangdPid": 1234, "truncated": false, "slow": false } }
 ```
 
 ```json
@@ -46,6 +46,8 @@ clangd 只说 LSP，DSH agent 只会调 MCP 工具。中间这层桥负责：
 ```
 
 `meta.slow` 在耗时超过 5 秒时为 `true`；`meta.documentVersion` 只在文档类工具里出现。
+
+列表类工具（`definition` / `references` / `diagnostics` / `document_symbols` / `workspace_symbols`）的 `truncated` 同时出现在**顶层**与 `meta.truncated`（两者一致），严格 schema 直接取顶层即可；`clangd_references` 的顶层字段是 `locations`（不是 `references`）。
 
 ## 安装与运行
 
@@ -80,7 +82,8 @@ node src/server.js
 | `requireCompileDb` | `true` | 缺 compile db 时拒绝启动 clangd |
 | `backgroundIndex` | `true` | 传 `--background-index`；关掉后跨 TU 的定义可能只返回声明 |
 | `clangTidy` | `false` | 传 `--clang-tidy` |
-| `queryDriver` | `null` | 需要同时把 `allowQueryDriver` 设为 `true` 才生效 |
+| `queryDriver` | `null` | 高风险：需同时把 `allowQueryDriver` 设为 `true`，且路径（`;` 分隔的 glob 每一项）必须落在 `allowedRoots` 内；越界/未授权会被禁用并在 `health` 中告警 |
+| `allowQueryDriver` | `false` | 显式授权 `queryDriver` |
 | `startupTimeoutMs` | `30000` | LSP `initialize` 超时 |
 | `requestTimeoutMs` | `30000` | 单次 LSP 请求超时 |
 | `diagnosticsWaitMs` | `2000` | `clangd_diagnostics` 默认等待推送的时间（0..10000） |
@@ -90,7 +93,7 @@ node src/server.js
 | `maxRestartsPerHour` | `3` | clangd 崩溃后的重启预算（0.5s/1s/2s 退避） |
 | `maxWorkspaceQueryLength` | `128` | `workspace_symbols` 的 `query` 上限 |
 | `env` | `{}` | 追加给 clangd 的环境变量（仅白名单键，支持 `%VAR%` 展开） |
-| `log` | `{level:"info", dir:临时目录, maxBytes:5MB, maxFiles:3}` | 日志写 stderr + 文件，绝不写 stdout |
+| `log` | `{level:"info", dir:临时目录, maxBytes:5MB, maxFiles:3}` | 日志写 stderr + 文件，绝不写 stdout；`log.dir` 必须位于 `projectRoot` 或系统临时目录，越界会回落到默认目录并告警 |
 
 环境变量：`CLANGD_BRIDGE_CONFIG`、`CLANGD_PATH`、`CLANGD_PROJECT_ROOT`、`CLANGD_COMPILE_COMMANDS_DIR`、`CLANGD_ALLOWED_ROOTS`（分号分隔）、`CLANGD_REQUEST_TIMEOUT_MS`、`CLANGD_LOG_LEVEL`。
 
@@ -146,6 +149,12 @@ node src/server.js
 - 不发 `rename`、`formatting`、`codeAction`、`applyEdit`、`workspace/executeCommand`。
 - 唯一的磁盘副作用来自 clangd 自己：在 `compileCommandsDir` 下写 `.cache/clangd/index`（`--background-index` 时）。桥不写源码、不生成 compile db。
 - 日志写到临时目录（或配置的 `log.dir`）与 stderr，不污染 stdout。
+
+诊断与重启语义：
+
+- 诊断缓存按 URI 管理：首次 `didOpen` 与内容变化 `didChange` 之前清空该 URI 的旧诊断，只有内容未变（mtime/size 相同）时才复用缓存——避免把上一次的诊断当成当前结果。
+- clangd 退出/重启时清空全部诊断缓存与文档记录（不发 `didClose`）；下一次查询会重新 `didOpen`（version 从 1 开始），并重新等待 `publishDiagnostics`。
+- `clangd_health` 的 `checks` 包含 `log.dir` 与 `queryDriver` 两项：前者校验日志目录在 `projectRoot`/系统临时目录内，后者在启用时给出高风险警告、被禁用时给出原因。
 
 ## 测试与验收
 

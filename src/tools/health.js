@@ -1,10 +1,12 @@
 // clangd_health：自检。默认不启动常驻 clangd，只做静态检查 + 一次短命 --version。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { BridgeError } from '../errors.js';
 import { inspectCompileDb, isMsvcDb } from '../compileDb.js';
 import { resolveClangdPath } from '../config.js';
+import { isInsideRoot, realpathLoose } from '../paths.js';
 import { asArgs, boolArg, metaFor } from './common.js';
 
 export const name = 'clangd_health';
@@ -105,6 +107,32 @@ export async function handler(ctx, rawArgs) {
     && (compileStatus.valid || !config.requireCompileDb)
     && (version.major === null || version.major >= 16),
   );
+
+  // 日志目录：必须位于 projectRoot（workspace）或系统临时目录内（规格 10.1）。
+  const logDir = config.log && config.log.dir ? config.log.dir : null;
+  if (logDir) {
+    const logReal = realpathLoose(logDir);
+    const tmpReal = realpathLoose(os.tmpdir());
+    const projectReal = projectRoot ? realpathLoose(projectRoot) : null;
+    const logOk = Boolean(logReal && ((tmpReal && isInsideRoot(logReal, tmpReal)) || (projectReal && isInsideRoot(logReal, projectReal))));
+    checks.push({ id: 'log.dir', ok: logOk, detail: logOk ? logDir : `${logDir}（不在 projectRoot 或系统临时目录内）` });
+    if (!logOk) warnings.push(`log.dir 不在 projectRoot 或系统临时目录内：${logDir}，日志可能写入任意可写目录。`);
+  } else {
+    checks.push({ id: 'log.dir', ok: true, detail: '未启用文件日志' });
+  }
+
+  // queryDriver：高风险能力，路径必须锁在 allowedRoots 内，启用时必须给出警告（规格 10.3）。
+  const queryDriverRequested = config.queryDriverRequested || (config.queryDriverIssue ? config.queryDriver : null);
+  const queryDriverActive = Boolean(config.queryDriver);
+  if (queryDriverActive) {
+    checks.push({ id: 'queryDriver', ok: true, detail: `已启用：${config.queryDriver}` });
+    warnings.push(`queryDriver 已启用（${config.queryDriver}）：clangd 会执行匹配的编译器驱动来推断系统头；请确认路径可信且在 allowedRoots 内。`);
+  } else if (config.queryDriverIssue) {
+    checks.push({ id: 'queryDriver', ok: false, detail: `已禁用：${config.queryDriverIssue}` });
+    warnings.push(`queryDriver 已禁用：${config.queryDriverIssue}`);
+  } else {
+    checks.push({ id: 'queryDriver', ok: true, detail: queryDriverRequested ? `未启用（${queryDriverRequested}）` : '未配置' });
+  }
 
   let processInfo = ctx.client.info;
   if (start) {

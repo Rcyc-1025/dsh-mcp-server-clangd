@@ -9,6 +9,7 @@ import path from 'node:path';
 import { BridgeError } from '../errors.js';
 import { inspectCompileDb, isMsvcDb } from '../compileDb.js';
 import { resolveClangdPath } from '../config.js';
+import { queryDriverProblem } from '../paths.js';
 import { pathToFileURL } from 'node:url';
 import { LspFramer, encodeMessage } from './framing.js';
 
@@ -159,6 +160,14 @@ export class LspClient extends EventEmitter {
       if (!this.config.allowQueryDriver) {
         throw new BridgeError('CONFIG_INVALID', 'queryDriver 需要 allowQueryDriver: true', {
           queryDriver: this.config.queryDriver,
+        });
+      }
+      // 双层校验：即使配置对象被直接构造，也不允许把 clangd 的编译器驱动指向 allowedRoots 之外。
+      const problem = queryDriverProblem(this.config.queryDriver, this.config.allowedRoots || []);
+      if (problem) {
+        throw new BridgeError('CONFIG_INVALID', `queryDriver 不可用：${problem}`, {
+          queryDriver: this.config.queryDriver,
+          allowedRoots: (this.config.allowedRoots || []).slice(),
         });
       }
       args.push(`--query-driver=${this.config.queryDriver}`);
@@ -366,6 +375,8 @@ export class LspClient extends EventEmitter {
           restarts: this.restarts,
         }),
       );
+      // 旧进程的诊断不再有效；同时让等待 publishDiagnostics 的调用立即返回 pending。
+      this.clearAllDiagnostics();
       this.emit('exit', code, signal);
     });
   }
@@ -500,6 +511,22 @@ export class LspClient extends EventEmitter {
     return this.diagnostics.get(uri) || null;
   }
 
+  // 首次 didOpen / 内容变化时调用：旧版本的诊断必须丢弃，否则会把上一次的诊断当成当前结果返回。
+  clearDiagnostics(uri) {
+    this.diagnostics.delete(uri);
+  }
+
+  // clangd 退出/重启后，旧诊断与旧版本都不再有意义：清空缓存并让等待方立即返回 null（pending）。
+  clearAllDiagnostics() {
+    this.diagnostics.clear();
+    for (const [uri, set] of [...this.diagnosticsWaiters]) {
+      for (const waiter of [...set]) {
+        if (typeof waiter.cancel === 'function') waiter.cancel();
+      }
+      this.diagnosticsWaiters.delete(uri);
+    }
+  }
+
   // 等待与指定 uri 的诊断（版本 >= minVersion）；超时返回 null，由调用方标记 pending。
   waitForDiagnostics(uri, minVersion, waitMs) {
     const cached = this.diagnostics.get(uri);
@@ -513,15 +540,16 @@ export class LspClient extends EventEmitter {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        set.delete(onDiagnostics);
+        set.delete(waiter);
         if (set.size === 0) this.diagnosticsWaiters.delete(uri);
         resolve(value);
       };
-      const onDiagnostics = (entry) => {
+      const waiter = (entry) => {
         if (minVersion === null || entry.version === null || entry.version >= minVersion) finish(entry);
       };
+      waiter.cancel = () => finish(null);
       const timer = setTimeout(() => finish(null), waitMs);
-      set.add(onDiagnostics);
+      set.add(waiter);
     });
   }
 

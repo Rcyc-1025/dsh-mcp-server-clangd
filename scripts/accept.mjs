@@ -133,6 +133,30 @@ async function helloScenarios() {
     record('F5', '干净文件 diagnostics 为空且 pending=false', clean.result.pending === false && clean.result.total === 0,
       `total=${clean.result.total}`);
 
+    // 规格 §6.3/§7.2/§7.4/§7.6/§7.7：truncated 在顶层（不只是 meta），references 顶层字段是 locations。
+    const schemaCalls = [
+      ['clangd_definition', { file: 'main.cpp', line: 3, column: 10 }],
+      ['clangd_references', { file: 'foo.cpp', line: 2, column: 5 }],
+      ['clangd_diagnostics', { file: 'main.cpp', waitMs: 0 }],
+      ['clangd_document_symbols', { file: 'main.cpp' }],
+      ['clangd_workspace_symbols', { query: 'foo', limit: 10 }],
+    ];
+    const schemaProblems = [];
+    for (const [tool, args] of schemaCalls) {
+      const res = await client.callTool(tool, args);
+      if (typeof res.result.truncated !== 'boolean') schemaProblems.push(`${tool}:truncated`);
+      if (res.result.meta.truncated !== res.result.truncated) schemaProblems.push(`${tool}:meta-truncated`);
+    }
+    const refsShape = await client.callTool('clangd_references', { file: 'foo.cpp', line: 2, column: 5 });
+    if (!Array.isArray(refsShape.result.locations)) schemaProblems.push('references:locations');
+    if (refsShape.result.references !== undefined) schemaProblems.push('references:old-field');
+    record('F9', '顶层 truncated 与 references.locations', schemaProblems.length === 0, schemaProblems.join(',') || 'ok');
+
+    const health = await client.callTool('clangd_health', {});
+    const checkIds = health.result.checks.map((c) => c.id);
+    record('F10', 'health 含 log.dir 与 queryDriver 检查',
+      checkIds.includes('log.dir') && checkIds.includes('queryDriver'), checkIds.join(','));
+
     const outside = await client.callTool('clangd_definition', { file: 'C:/Windows/win.ini', line: 1, column: 1 });
     record('E', '路径越界 → PATH_OUTSIDE_ALLOWED_ROOTS', outside.result.code === 'PATH_OUTSIDE_ALLOWED_ROOTS',
       outside.result.code);
