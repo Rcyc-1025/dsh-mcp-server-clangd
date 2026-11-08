@@ -132,6 +132,21 @@ test('queryDriver 指向 allowedRoots 之外时被禁用并告警', () => {
   assert.ok(loaded.warnings.some((w) => w.includes('queryDriver 已禁用')));
 });
 
+test('queryDriver 含 .. 时被禁用（即使静态前缀在 allowedRoots 内）', () => {
+  const cwd = tmpProject('querydriver-dots');
+  const project = path.join(cwd, 'proj');
+  fs.mkdirSync(project, { recursive: true });
+  const queryDriver = `${project.split('\\').join('/')}/*/../../Windows/clang.exe`;
+  fs.writeFileSync(
+    path.join(cwd, 'clangd-bridge.json'),
+    JSON.stringify({ projectRoot: project, allowQueryDriver: true, queryDriver }),
+  );
+  const loaded = loadConfig({ argv: [], env: {}, cwd });
+  assert.equal(loaded.config.queryDriver, null);
+  assert.match(loaded.config.queryDriverIssue, /\.\./);
+  assert.ok(loaded.warnings.some((w) => w.includes('queryDriver 已禁用')));
+});
+
 test('log.dir 在 projectRoot 内时保留，在 projectRoot 与系统临时目录之外时回落默认目录', () => {
   const cwd = tmpProject('logdir');
   const project = path.join(cwd, 'proj');

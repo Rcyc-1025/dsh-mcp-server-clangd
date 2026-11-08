@@ -82,7 +82,7 @@ node src/server.js
 | `requireCompileDb` | `true` | 缺 compile db 时拒绝启动 clangd |
 | `backgroundIndex` | `true` | 传 `--background-index`；关掉后跨 TU 的定义可能只返回声明 |
 | `clangTidy` | `false` | 传 `--clang-tidy` |
-| `queryDriver` | `null` | 高风险：需同时把 `allowQueryDriver` 设为 `true`，且路径（`;` 分隔的 glob 每一项）必须落在 `allowedRoots` 内；越界/未授权会被禁用并在 `health` 中告警 |
+| `queryDriver` | `null` | 高风险：需同时把 `allowQueryDriver` 设为 `true`；`;` 分隔的每一项必须是绝对路径、不含 `..`，静态前缀与**每个通配匹配项** realpath 后都必须落在 `allowedRoots` 内；越界/未授权会被禁用并在 `health` 中告警 |
 | `allowQueryDriver` | `false` | 显式授权 `queryDriver` |
 | `startupTimeoutMs` | `30000` | LSP `initialize` 超时 |
 | `requestTimeoutMs` | `30000` | 单次 LSP 请求超时 |

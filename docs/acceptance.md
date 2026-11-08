@@ -78,7 +78,11 @@ npm run accept
 
 ### queryDriver 与 log.dir 的收口（审查修复）
 
-- `queryDriver` 只在 `allowQueryDriver:true` 时生效，且 `;` 分隔的每一项（glob 取静态前缀）`realpath` 后必须位于 `allowedRoots` 内；不满足时配置层直接禁用 + 警告，`buildArgs()` 二次校验并抛 `CONFIG_INVALID`，`health.checks` 给出 `queryDriver` 结论。
+- `queryDriver` 只在 `allowQueryDriver:true` 时生效。`;` 分隔的每一项：
+  1. 必须是绝对路径，且**不含 `..` 段**（`llvm/*/../../Windows/x.exe` 只有展开后才看得出逃逸，直接拒绝）；
+  2. 静态前缀所在目录 realpath 后必须在 `allowedRoots` 内；
+  3. 通配展开后的**每个已存在匹配项**再做一次 realpath + `allowedRoots` 校验（防目录联接/符号链接跳出）。
+- 不满足时配置层直接禁用 + 警告，`buildArgs()` 二次校验并抛 `CONFIG_INVALID`，`health.checks` 给出 `queryDriver` 结论。
 - `log.dir` 必须在 `projectRoot` 或系统临时目录内；越界时回落到 `<tmp>/dsh-clangd-bridge/logs` 并写 warning，`health.checks` 的 `log.dir` 同时复核。
 
 ### 同步 schema 修正（审查修复）

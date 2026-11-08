@@ -100,10 +100,74 @@ export function expandEnvVars(value, env = process.env) {
 }
 
 const GLOB_CHARS = /[*?\[]/;
+const MATCH_LIMIT = 512;
+
+// `..` 段会让“静态前缀在允许根内”的结论失效：`llvm/*/../../Windows/x.exe`
+// 只有在通配展开后才看得出逃逸，因此直接判为不可接受（queryDriver 是执行外部编译器的入口）。
+function hasParentSegment(value) {
+  return value.split(/[\\/]+/).some((seg) => seg === '..');
+}
+
+function globSegmentToRegExp(segment) {
+  const flags = process.platform === 'win32' ? 'i' : '';
+  let out = '^';
+  for (let i = 0; i < segment.length; i += 1) {
+    const ch = segment[i];
+    if (ch === '*') out += '[^\\\\/]*';
+    else if (ch === '?') out += '[^\\\\/]';
+    else if (ch === '[') {
+      const end = segment.indexOf(']', i + 1);
+      if (end === -1) out += '\\[';
+      else {
+        let body = segment.slice(i + 1, end);
+        if (body.startsWith('!')) body = `^${body.slice(1)}`;
+        out += `[${body}]`;
+        i = end;
+      }
+    } else out += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`${out}$`, flags);
+}
+
+// 仅展开已存在的路径；不支持 `**`。结果有上限（512），调用方据此判断通配是否过宽。
+export function expandGlobPattern(pattern) {
+  const segs = String(pattern).split(/[\\/]+/).filter((s) => s && s !== '.');
+  let base;
+  if (/^[A-Za-z]:$/.test(segs[0] || '')) base = `${segs.shift()}${path.sep}`;
+  else if (path.isAbsolute(pattern)) base = path.sep;
+  else return [];
+  let current = [base];
+  for (const seg of segs) {
+    if (!GLOB_CHARS.test(seg)) {
+      current = current.map((dir) => path.join(dir, seg)).filter((p) => fs.existsSync(p));
+    } else {
+      const re = globSegmentToRegExp(seg);
+      const next = [];
+      for (const dir of current) {
+        let names;
+        try {
+          names = fs.readdirSync(dir);
+        } catch {
+          continue;
+        }
+        for (const name of names) {
+          if (re.test(name)) next.push(path.join(dir, name));
+          if (next.length >= MATCH_LIMIT) break;
+        }
+        if (next.length >= MATCH_LIMIT) break;
+      }
+      current = next;
+    }
+    if (current.length === 0) return [];
+    if (current.length > MATCH_LIMIT) current = current.slice(0, MATCH_LIMIT);
+  }
+  return current;
+}
 
 // 校验 queryDriver（'=' 后用分号分隔的 glob 列表）：
-// 每个条目必须是绝对路径，且其静态部分所在目录（realpath 后）位于 allowedRoots 内。
-// 返回 null 表示通过；否则返回中文原因。不做“信任用户”的假设：这是执行外部编译器的入口。
+// 每个条目必须是绝对路径、不含 `..`；静态前缀所在目录与每个通配匹配项 realpath 后
+// 都必须位于 allowedRoots 内。返回 null 表示通过；否则返回中文原因。
+// 不做“信任用户”的假设：这是执行外部编译器的入口。
 export function queryDriverProblem(value, allowedRoots, env = process.env) {
   if (!value) return null;
   const entries = String(value).split(';').map((s) => s.trim()).filter(Boolean);
@@ -112,6 +176,7 @@ export function queryDriverProblem(value, allowedRoots, env = process.env) {
     const entry = expandEnvVars(rawEntry, env);
     if (isDeviceOrUncPath(entry)) return `条目是设备/UNC 路径：${entry}`;
     if (!path.isAbsolute(entry)) return `条目必须是绝对路径：${entry}`;
+    if (hasParentSegment(entry)) return `条目包含 ..，展开后可能逃出 allowedRoots：${entry}`;
     const globAt = entry.search(GLOB_CHARS);
     const staticPart = globAt === -1 ? entry : entry.slice(0, globAt);
     if (!staticPart) return `条目必须以绝对路径开头：${entry}`;
@@ -121,6 +186,14 @@ export function queryDriverProblem(value, allowedRoots, env = process.env) {
     if (!realAnchor) return `路径不存在：${anchor}`;
     if (!(allowedRoots || []).some((root) => isInsideRoot(realAnchor, root))) {
       return `路径不在 allowedRoots 内：${realAnchor}`;
+    }
+    // 静态前缀通过还不够：`*` 可能匹配到指向允许根之外的符号链接/联接，
+    // 因此每个实际匹配项都要 realpath 后再校验一次。
+    for (const match of expandGlobPattern(entry)) {
+      const realMatch = realpathLoose(match) || match;
+      if (!(allowedRoots || []).some((root) => isInsideRoot(realMatch, root))) {
+        return `通配匹配项解析后不在 allowedRoots 内：${match} -> ${realMatch}`;
+      }
     }
   }
   return null;
